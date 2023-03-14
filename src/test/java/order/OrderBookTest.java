@@ -4,6 +4,11 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static order.OrderFixtures.newBid;
 import static order.OrderFixtures.withSize;
@@ -119,6 +124,56 @@ class OrderBookTest {
 
         // then 2
         assertThat(totalSizeAvailable2).isEqualTo(bid200.getSize() + bid100.getSize() + bid10.getSize());
+    }
+
+    @Test
+    void multithreadingTest() throws InterruptedException {
+        ConcurrentHashMap<Long, Order> orders = new ConcurrentHashMap<>();
+        var orderBook = new OrderBook();
+        int threads = 4;
+        ExecutorService executorService = Executors.newFixedThreadPool(threads);
+        AtomicInteger priceUnique = new AtomicInteger(1);
+        CountDownLatch latch = new CountDownLatch(threads);
+        Runnable modifyingThread = () -> {
+            var added = new ArrayList<Order>();
+            for (int i = 0; i < 1000; i++) {
+                if (i % 2 == 0) {
+                    Order order = newBid(priceUnique.getAndIncrement() + 100.0, 10);
+                    orderBook.add(order);
+                    orders.put(order.getId(), order);
+                    added.add(order);
+                } else if (!added.isEmpty() && i % 3 == 0) {
+                    var removed = added.remove(0);
+                    orderBook.remove(removed.getId());
+                    orders.remove(removed.getId());
+                } else if (!added.isEmpty()) {
+                    int index = added.size() / 2;
+                    var modified = added.get(index);
+                    orderBook.modify(modified.getId(), 20);
+                    orders.put(modified.getId(), new Order(modified.getId(), modified.getPrice(), modified.getSide(), 20));
+                } else {
+                    try {
+                        Thread.sleep(2l);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+            latch.countDown();
+        };
+        executorService.submit(modifyingThread);
+        executorService.submit(modifyingThread);
+        executorService.submit(modifyingThread);
+        executorService.submit(modifyingThread);
+        latch.await(10, TimeUnit.SECONDS);
+
+        await().untilAsserted(() -> {
+            var actual = orderBook.getAllOf(Side.Bid.toChar());
+
+            var expected = new ArrayList(orders.values());
+            Collections.sort(expected, (Comparator<Order>) (o1, o2) -> Double.compare(o2.getPrice(), o1.getPrice()));
+            assertThat(actual).containsExactlyElementsOf(expected);
+        });
     }
 
     private void waitForBookToContain(OrderBook orderBook, Order... orders) {
