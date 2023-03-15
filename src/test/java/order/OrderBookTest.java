@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
 import static order.OrderFixtures.newBid;
 import static order.OrderFixtures.withSize;
@@ -134,7 +135,24 @@ class OrderBookTest {
         ExecutorService executorService = Executors.newFixedThreadPool(threads);
         AtomicInteger priceUnique = new AtomicInteger(1);
         CountDownLatch latch = new CountDownLatch(threads);
-        Runnable modifyingThread = () -> {
+        Runnable modifyingThread = prepareModifyingThread(orders, orderBook, priceUnique, latch);
+        IntStream.range(0, 4)
+                .forEach(i -> executorService.submit(modifyingThread));
+
+        latch.await(10, TimeUnit.SECONDS);
+
+        await().untilAsserted(() -> {
+            var actual = orderBook.getAllOf(Side.Bid.toChar());
+
+            var expected = new ArrayList(orders.values());
+            Collections.sort(expected, (Comparator<Order>) (o1, o2) -> Double.compare(o2.getPrice(), o1.getPrice()));
+            assertThat(actual).containsExactlyElementsOf(expected);
+        });
+    }
+
+    private static Runnable prepareModifyingThread(ConcurrentHashMap<Long, Order> orders, OrderBook orderBook,
+                                                   AtomicInteger priceUnique, CountDownLatch latch) {
+        return () -> {
             var added = new ArrayList<Order>();
             for (int i = 0; i < 1000; i++) {
                 if (i % 2 == 0) {
@@ -161,19 +179,6 @@ class OrderBookTest {
             }
             latch.countDown();
         };
-        executorService.submit(modifyingThread);
-        executorService.submit(modifyingThread);
-        executorService.submit(modifyingThread);
-        executorService.submit(modifyingThread);
-        latch.await(10, TimeUnit.SECONDS);
-
-        await().untilAsserted(() -> {
-            var actual = orderBook.getAllOf(Side.Bid.toChar());
-
-            var expected = new ArrayList(orders.values());
-            Collections.sort(expected, (Comparator<Order>) (o1, o2) -> Double.compare(o2.getPrice(), o1.getPrice()));
-            assertThat(actual).containsExactlyElementsOf(expected);
-        });
     }
 
     private void waitForBookToContain(OrderBook orderBook, Order... orders) {

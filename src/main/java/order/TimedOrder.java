@@ -10,7 +10,7 @@ class TimedOrder implements Comparable<TimedOrder> {
 
     private LocalDateTime time;
 
-    private TimedOrder(long id, double price, Side side, long size) {
+    TimedOrder(long id, double price, Side side, long size) {
         this.id = id;
         this.price = price;
         this.size = size;
